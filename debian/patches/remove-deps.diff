@@ -1,0 +1,18 @@
+Description: remove deps in rebar.config
+ Without this patch, rebar would download and compile the listed deps
+ at compile time.
+Author: Philipp Huebner <debalance@debian.org>
+
+Index: erlang-lager/rebar.config
+===================================================================
+--- erlang-lager.orig/rebar.config	2014-04-10 15:35:45.761757604 +0200
++++ erlang-lager/rebar.config	2014-04-10 16:21:02.764007240 +0200
+@@ -1,8 +1,6 @@
+ {erl_opts, [debug_info, warn_untyped_record]}.
+ {erl_first_files, ["src/lager_util.erl"]}.
+ {deps, [
+-        {goldrush, "0\.1\.6",
+-            {git, "git://github.com/DeadZen/goldrush.git", {tag, "0.1.6"}}}
+        ]}.
+ 
+ {xref_checks, []}.
