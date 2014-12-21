@@ -1,4 +1,3 @@
-%% -*- coding: latin-1 -*-
 %% Copyright (c) 2011-2012 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
@@ -464,6 +463,9 @@ filesystem_test_() ->
     {foreach,
         fun() ->
                 file:write_file("test.log", ""),
+                file:delete("foo.log"),
+                file:delete("foo.log.0"),
+                file:delete("foo.log.1"),
                 error_logger:tty(false),
                 application:load(lager),
                 application:set_env(lager, handlers, [{lager_test_backend, info}]),
@@ -502,7 +504,7 @@ filesystem_test_() ->
                 fun() ->
                         %% XXX if this test fails, check that this file is encoded latin-1, not utf-8!
                         gen_event:add_handler(lager_event, lager_file_backend, [{"test.log", info}, {lager_default_formatter}]),
-                        lager:log(error, self(),"~ts", ["LÆÝÎN-ï"]),
+                        lager:log(error, self(),"~ts", [[76, 198, 221, 206, 78, $-, 239]]),
                         {ok, Bin} = file:read_file("test.log"),
                         Pid = pid_to_list(self()),
                         Res = re:split(Bin, " ", [{return, list}, {parts, 5}]),
@@ -703,6 +705,17 @@ filesystem_test_() ->
                         lager:log(error, self(), "Test message"),
                         {ok, Bin3} = file:read_file("foo.log"),
                         ?assertMatch([_, _, "[error]", _, "Test message\n"], re:split(Bin3, " ", [{return, list}, {parts, 5}]))
+                end
+            },
+            {"tracing with options should work",
+                fun() ->
+                        file:delete("foo.log"),
+                        {ok, _} = lager:trace_file("foo.log", [{module, ?MODULE}], [{size, 20}, {check_interval, 1}]), 
+                        lager:error("Test message"),
+                        ?assertNot(filelib:is_regular("foo.log.0")),
+                        lager:error("Test message"),
+                        timer:sleep(10),
+                        ?assert(filelib:is_regular("foo.log.0"))
                 end
             }
         ]
