@@ -5,6 +5,8 @@ Build-Depends: debhelper (>= 9), dh-rebar, erlang-goldrush
 Standards-Version: 3.9.5
 Section: libs
 Homepage: https://github.com/basho/lager
+VCS-Browser: https://github.com/jabber-at/lager
+VCS-Git: https://github.com/jabber-at/lager.git
 
 
 Package: erlang-lager

@@ -1,6 +1,7 @@
 erlang-lager (2.0.3.26-1) unstable; urgency=low
 
   * Imported 2.0.3-30-gced9569.
+  * Add VCS-* fields to debian/control.
 
  -- Mathias Ertl <mati@jabber.at>  Sun, 21 Dec 2014 16:42:52 +0100
 
