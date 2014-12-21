@@ -3,6 +3,7 @@ erlang-lager (2.0.3.26-1) unstable; urgency=low
   * Imported 2.0.3-30-gced9569.
   * Add VCS-* fields to debian/control.
   * Now maintaining this package for https://apt.jabber.at.
+  * Add dpkg-dev (>= 1.16.1~) as build-dependency.
   * Do not install lager_common_test_backend.beam. This is not needed at
     runtime but the file adds erlang-common-test as dependency, which in turn
     has loads of other dependencies.
