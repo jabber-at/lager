@@ -1,6 +1,6 @@
 Source: erlang-lager
 Priority: optional
-Maintainer: Philipp Huebner <debalance@debian.org>
+Maintainer: Mathias Ertl <mati@jabber.at>
 Build-Depends: debhelper (>= 9), dh-rebar, erlang-goldrush
 Standards-Version: 3.9.5
 Section: libs
