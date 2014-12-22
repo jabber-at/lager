@@ -1,3 +1,10 @@
+erlang-lager (2.0.3.26-2) unstable; urgency=low
+
+  * Remove lager_common_test_backend before configuring, otherwise the .app
+    file requires it.
+
+ -- Mathias Ertl <mati@jabber.at>  Mon, 22 Dec 2014 13:25:20 +0100
+
 erlang-lager (2.0.3.26-1) unstable; urgency=low
 
   * Imported 2.0.3-30-gced9569.
