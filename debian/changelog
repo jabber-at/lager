@@ -1,3 +1,9 @@
+erlang-lager (3.0.2-0.1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Mathias Ertl <mati@jabber.at>  Thu, 03 Dec 2015 11:17:34 +0100
+
 erlang-lager (3.0.1-0.1) unstable; urgency=low
 
   * New upstream release.
