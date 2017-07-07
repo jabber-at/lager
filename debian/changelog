@@ -3,6 +3,7 @@ erlang-lager (3.5.1-0.1) unstable; urgency=low
   * New upstream release.
   * Update Standards-Version to 4.0.0 (no changes needed).
   * Add dh-rebar as build-dependency.
+  * Update watch file.
 
  -- Mathias Ertl <mati@jabber.at>  Fri, 07 Jul 2017 18:40:55 +0200
 
