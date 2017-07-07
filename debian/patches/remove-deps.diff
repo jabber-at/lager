@@ -5,11 +5,13 @@ Author: Philipp Huebner <debalance@debian.org>
 
 --- a/rebar.config
 +++ b/rebar.config
-@@ -44,7 +44,6 @@
+@@ -47,9 +47,6 @@
      nowarn_export_all
  ]}.
- {deps, [
--    {goldrush, ".*", {git, "git://github.com/DeadZen/goldrush.git", {tag, "0.1.7"}}}
- ]}.
+ 
+-{deps, [
+-    {goldrush, "0.1.9"}
+-]}.
  
  {xref_checks, []}.
+ {xref_queries, [{"(XC - UC) || (XU - X - B - lager_default_tracer : Mod - erlang:\"(is_map|map_size)\"/1 - maps:to_list/1)", []}]}.
