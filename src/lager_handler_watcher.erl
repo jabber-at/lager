@@ -61,6 +61,18 @@ handle_info({gen_event_EXIT, Module, normal}, #state{module=Module} = State) ->
     {stop, normal, State};
 handle_info({gen_event_EXIT, Module, shutdown}, #state{module=Module} = State) ->
     {stop, normal, State};
+handle_info({gen_event_EXIT, Module, {'EXIT', {kill_me, [_KillerHWM, KillerReinstallAfter]}}},
+        #state{module=Module, sink=Sink} = State) ->
+    %% Brutally kill the manager but stay alive to restore settings.
+    %%
+    %% SinkPid here means the gen_event process. Handlers *all* live inside the
+    %% same gen_event process space, so when the Pid is killed, *all* of the 
+    %% pending log messages in its mailbox will die too.
+    SinkPid = whereis(Sink),
+    unlink(SinkPid),
+    exit(SinkPid, kill),
+    erlang:send_after(KillerReinstallAfter, self(), {reboot, Sink}),
+    {noreply, State};
 handle_info({gen_event_EXIT, Module, Reason}, #state{module=Module,
         config=Config, sink=Sink} = State) ->
     case lager:log(error, self(), "Lager event handler ~p exited with reason ~s",
@@ -74,6 +86,9 @@ handle_info({gen_event_EXIT, Module, Reason}, #state{module=Module,
     {noreply, State};
 handle_info(reinstall_handler, #state{module=Module, config=Config, sink=Sink} = State) ->
     install_handler(Sink, Module, Config),
+    {noreply, State};
+handle_info({reboot, Sink}, State) ->
+    _ = lager_app:boot(Sink),
     {noreply, State};
 handle_info(stop, State) ->
     {stop, normal, State};
@@ -135,11 +150,10 @@ reinstall_on_initial_failure_test_() ->
                     application:unset_env(lager, crash_log),
                     lager:start(),
                     try
-                      ?assertEqual(1, lager_test_backend:count()),
                       {_Level, _Time, Message, _Metadata} = lager_test_backend:pop(),
                       ?assertMatch("Lager failed to install handler lager_crash_backend into lager_event, retrying later :"++_, lists:flatten(Message)),
-                      ?assertEqual(0, lager_test_backend:count()),
                       timer:sleep(6000),
+                      lager_test_backend:flush(),
                       ?assertEqual(0, lager_test_backend:count()),
                       ?assert(lists:member(lager_crash_backend, gen_event:which_handlers(lager_event)))
                     after
@@ -162,14 +176,12 @@ reinstall_on_runtime_failure_test_() ->
                     application:unset_env(lager, crash_log),
                     lager:start(),
                     try
-                        ?assertEqual(0, lager_test_backend:count()),
                         ?assert(lists:member(lager_crash_backend, gen_event:which_handlers(lager_event))),
                         timer:sleep(6000),
-                        ?assertEqual(2, lager_test_backend:count()),
-                        {_Severity, _Date, Msg, _Metadata} = lager_test_backend:pop(),
-                        ?assertEqual("Lager event handler lager_crash_backend exited with reason crash", lists:flatten(Msg)),
-                        {_Severity2, _Date2, Msg2, _Metadata2} = lager_test_backend:pop(),
-                        ?assertMatch("Lager failed to install handler lager_crash_backend into lager_event, retrying later :"++_, lists:flatten(Msg2)),
+
+                        pop_until("Lager event handler lager_crash_backend exited with reason crash", fun lists:flatten/1),
+                        pop_until("Lager failed to install handler lager_crash_backend into lager_event, retrying later",
+                                  fun(Msg) -> string:substr(lists:flatten(Msg), 1, 84) end),
                         ?assertEqual(false, lists:member(lager_crash_backend, gen_event:which_handlers(lager_event)))
                     after
                        application:stop(lager),
@@ -180,5 +192,17 @@ reinstall_on_runtime_failure_test_() ->
         ]
     }.
 
+pop_until(String, Fun) ->
+    try_backend_pop(lager_test_backend:pop(), String, Fun).
+
+try_backend_pop(undefined, String, _Fun) ->
+    throw("Not found: " ++ String);
+try_backend_pop({_Severity, _Date, Msg, _Metadata}, String, Fun) ->
+    case Fun(Msg) of
+        String ->
+            ok;
+        _ ->
+            try_backend_pop(lager_test_backend:pop(), String, Fun)
+    end.
 
 -endif.
