@@ -23,17 +23,24 @@
 -behaviour(application).
 -include("lager.hrl").
 -ifdef(TEST).
+-compile([export_all]).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 -export([start/0,
          start/2,
          start_handler/3,
-         stop/1]).
+         configure_sink/2,
+         stop/1,
+         boot/1]).
+
+%% The `application:get_env/3` compatibility wrapper is useful
+%% for other modules
+-export([get_env/3]).
 
 -define(FILENAMES, '__lager_file_backend_filenames').
 -define(THROTTLE, lager_backend_throttle).
 -define(DEFAULT_HANDLER_CONF,
-        [{lager_console_backend, info},
+        [{lager_console_backend, [{level, info}]},
          {lager_file_backend,
           [{file, "log/error.log"}, {level, error},
            {size, 10485760}, {date, "$D0"}, {count, 5}]
@@ -52,21 +59,19 @@ start_throttle(Sink, Threshold, Window) ->
                                [Sink, ?THROTTLE, [Threshold, Window]]),
     ok.
 
-determine_async_behavior(_Sink, {ok, undefined}, _Window) ->
-    ok;
 determine_async_behavior(_Sink, undefined, _Window) ->
     ok;
-determine_async_behavior(_Sink, {ok, Threshold}, _Window) when not is_integer(Threshold) orelse Threshold < 0 ->
+determine_async_behavior(_Sink, Threshold, _Window) when not is_integer(Threshold) orelse Threshold < 0 ->
     error_logger:error_msg("Invalid value for 'async_threshold': ~p~n",
                            [Threshold]),
     throw({error, bad_config});
-determine_async_behavior(Sink, {ok, Threshold}, undefined) ->
+determine_async_behavior(Sink, Threshold, undefined) ->
     start_throttle(Sink, Threshold, erlang:trunc(Threshold * 0.2));
-determine_async_behavior(_Sink, {ok, Threshold}, {ok, Window}) when not is_integer(Window) orelse Window > Threshold orelse Window < 0 ->
+determine_async_behavior(_Sink, Threshold, Window) when not is_integer(Window) orelse Window > Threshold orelse Window < 0 ->
     error_logger:error_msg(
       "Invalid value for 'async_threshold_window': ~p~n", [Window]),
     throw({error, bad_config});
-determine_async_behavior(Sink, {ok, Threshold}, {ok, Window}) ->
+determine_async_behavior(Sink, Threshold, Window) ->
     start_throttle(Sink, Threshold, Window).
 
 start_handlers(_Sink, undefined) ->
@@ -93,7 +98,7 @@ start_handler(Sink, Module, Config) ->
                                            [Sink, Module, Config]),
     {Module, Watcher, Sink}.
 
-check_handler_config({lager_file_backend, F}, Config) when is_list(Config) ->
+check_handler_config({lager_file_backend, F}, Config) when is_list(Config); is_tuple(Config) ->
     Fs = case get(?FILENAMES) of
         undefined -> ordsets:new();
         X -> X
@@ -118,23 +123,30 @@ clean_up_config_checks() ->
 
 interpret_hwm(undefined) ->
     undefined;
-interpret_hwm({ok, undefined}) ->
-    undefined;
-interpret_hwm({ok, HWM}) when not is_integer(HWM) orelse HWM < 0 ->
+interpret_hwm(HWM) when not is_integer(HWM) orelse HWM < 0 ->
     _ = lager:log(warning, self(), "Invalid error_logger high water mark: ~p, disabling", [HWM]),
     undefined;
-interpret_hwm({ok, HWM}) ->
+interpret_hwm(HWM) ->
     HWM.
 
-start_error_logger_handler({ok, false}, _HWM, _Whitelist) ->
+maybe_install_sink_killer(_Sink, undefined, _ReinstallTimer) -> ok;
+maybe_install_sink_killer(Sink, HWM, undefined) -> maybe_install_sink_killer(Sink, HWM, 5000);
+maybe_install_sink_killer(Sink, HWM, ReinstallTimer) when is_integer(HWM) andalso is_integer(ReinstallTimer)
+                                                        andalso HWM >= 0 andalso ReinstallTimer >= 0 ->
+    _ = supervisor:start_child(lager_handler_watcher_sup, [Sink, lager_manager_killer,
+                                                           [HWM, ReinstallTimer]]);
+maybe_install_sink_killer(_Sink, HWM, ReinstallTimer) ->
+    error_logger:error_msg("Invalid value for 'killer_hwm': ~p or 'killer_reinstall_after': ~p", [HWM, ReinstallTimer]),
+    throw({error, bad_config}).
+
+-spec start_error_logger_handler(boolean(), pos_integer(), list()) -> list().
+start_error_logger_handler(false, _HWM, _Whitelist) ->
     [];
-start_error_logger_handler(_, HWM, undefined) ->
-    start_error_logger_handler(ignore_me, HWM, {ok, []});
-start_error_logger_handler(_, HWM, {ok, WhiteList}) ->
+start_error_logger_handler(true, HWM, WhiteList) ->
     GlStrategy = case application:get_env(lager, error_logger_groupleader_strategy) of
                     undefined ->
                         handle;
-                    {ok, GlStrategy0} when 
+                    {ok, GlStrategy0} when
                             GlStrategy0 =:= handle;
                             GlStrategy0 =:= ignore;
                             GlStrategy0 =:= mirror ->
@@ -146,23 +158,24 @@ start_error_logger_handler(_, HWM, {ok, WhiteList}) ->
                         throw({error, bad_config})
                 end,
 
-    case supervisor:start_child(lager_handler_watcher_sup, [error_logger, error_logger_lager_h, [HWM, GlStrategy]]) of
+
+    _ = case supervisor:start_child(lager_handler_watcher_sup, [error_logger, error_logger_lager_h, [HWM, GlStrategy]]) of
         {ok, _} ->
             [begin error_logger:delete_report_handler(X), X end ||
                 X <- gen_event:which_handlers(error_logger) -- [error_logger_lager_h | WhiteList]];
         {error, _} ->
             []
-    end.
+    end,
 
-%% `determine_async_behavior/3' is called with the results from either
-%% `application:get_env/2' and `proplists:get_value/2'. Since
-%% `application:get_env/2' wraps a successful retrieval in an `{ok,
-%% Value}' tuple, do the same for the result from
-%% `proplists:get_value/2'.
-wrap_proplist_value(undefined) ->
-    undefined;
-wrap_proplist_value(Value) ->
-    {ok, Value}.
+    Handlers = case application:get_env(lager, handlers) of
+        undefined ->
+            [{lager_console_backend, info},
+             {lager_file_backend, [{file, "log/error.log"},   {level, error}, {size, 10485760}, {date, "$D0"}, {count, 5}]},
+             {lager_file_backend, [{file, "log/console.log"}, {level, info}, {size, 10485760}, {date, "$D0"}, {count, 5}]}];
+        {ok, Val} ->
+            Val
+    end,
+    Handlers.
 
 configure_sink(Sink, SinkDef) ->
     lager_config:new_sink(Sink),
@@ -172,12 +185,11 @@ configure_sink(Sink, SinkDef) ->
                                 {gen_event, start_link,
                                  [{local, Sink}]},
                                 permanent, 5000, worker, dynamic}),
-    determine_async_behavior(Sink,
-                             wrap_proplist_value(
-                               proplists:get_value(async_threshold, SinkDef)),
-                             wrap_proplist_value(
-                               proplists:get_value(async_threshold_window, SinkDef))
+    determine_async_behavior(Sink, proplists:get_value(async_threshold, SinkDef),
+                             proplists:get_value(async_threshold_window, SinkDef)
                             ),
+    _ = maybe_install_sink_killer(Sink, proplists:get_value(killer_hwm, SinkDef),
+                              proplists:get_value(killer_reinstall_after, SinkDef)),
     start_handlers(Sink,
                    proplists:get_value(handlers, SinkDef, [])),
 
@@ -188,11 +200,16 @@ configure_extra_sinks(Sinks) ->
     lists:foreach(fun({Sink, Proplist}) -> configure_sink(Sink, Proplist) end,
                   Sinks).
 
-%% R15 doesn't know about application:get_env/3
-get_env(Application, Key, Default) ->
-    get_env_default(application:get_env(Application, Key),
-                    Default).
+-spec get_env(atom(), atom()) -> term().
+get_env(Application, Key) ->
+    get_env(Application, Key, undefined).
 
+%% R15 doesn't know about application:get_env/3
+-spec get_env(atom(), atom(), term()) -> term().
+get_env(Application, Key, Default) ->
+    get_env_default(application:get_env(Application, Key), Default).
+
+-spec get_env_default('undefined' | {'ok', term()}, term()) -> term().
 get_env_default(undefined, Default) ->
     Default;
 get_env_default({ok, Value}, _Default) ->
@@ -200,33 +217,50 @@ get_env_default({ok, Value}, _Default) ->
 
 start(_StartType, _StartArgs) ->
     {ok, Pid} = lager_sup:start_link(),
+    SavedHandlers = boot(),
+    _ = boot('__all_extra'),
+    _ = boot('__traces'),
+    clean_up_config_checks(),
+    {ok, Pid, SavedHandlers}.
 
+boot() ->
     %% Handle the default sink.
     determine_async_behavior(?DEFAULT_SINK,
-                             application:get_env(lager, async_threshold),
-                             application:get_env(lager, async_threshold_window)),
+                             get_env(lager, async_threshold),
+                             get_env(lager, async_threshold_window)),
+
+    _ = maybe_install_sink_killer(?DEFAULT_SINK, get_env(lager, killer_hwm),
+                              get_env(lager, killer_reinstall_after)),
+
     start_handlers(?DEFAULT_SINK,
                    get_env(lager, handlers, ?DEFAULT_HANDLER_CONF)),
-
-    ok = add_configured_traces(),
 
     lager:update_loglevel_config(?DEFAULT_SINK),
 
     SavedHandlers = start_error_logger_handler(
-                      application:get_env(lager, error_logger_redirect),
-                      interpret_hwm(application:get_env(lager, error_logger_hwm)),
-                      application:get_env(lager, error_logger_whitelist)
+                      get_env(lager, error_logger_redirect, true),
+                      interpret_hwm(get_env(lager, error_logger_hwm, 0)),
+                      get_env(lager, error_logger_whitelist, [])
                      ),
 
+    SavedHandlers.
+
+boot('__traces') ->
     _ = lager_util:trace_filter(none),
+    ok = add_configured_traces();
 
-    %% Now handle extra sinks
-    configure_extra_sinks(get_env(lager, extra_sinks, [])),
+boot('__all_extra') ->
+    configure_extra_sinks(get_env(lager, extra_sinks, []));
 
-    clean_up_config_checks(),
+boot(?DEFAULT_SINK) -> boot();
+boot(Sink) ->
+    AllSinksDef = get_env(lager, extra_sinks, []),
+    boot_sink(Sink, lists:keyfind(Sink, 1, AllSinksDef)).
 
-    {ok, Pid, SavedHandlers}.
-
+boot_sink(Sink, {Sink, Def}) ->
+    configure_sink(Sink, Def);
+boot_sink(Sink, false) ->
+    configure_sink(Sink, []).
 
 stop(Handlers) ->
     lists:foreach(fun(Handler) ->
@@ -255,11 +289,13 @@ add_configured_traces() ->
             TraceVal
     end,
 
-    lists:foreach(fun({Handler, Filter, Level}) ->
-                {ok, _} = lager:trace(Handler, Filter, Level)
-        end,
-        Traces),
+    lists:foreach(fun start_configured_trace/1, Traces),
     ok.
+
+start_configured_trace({Handler, Filter}) ->
+    {ok, _} = lager:trace(Handler, Filter);
+start_configured_trace({Handler, Filter, Level}) when is_atom(Level) ->
+    {ok, _} = lager:trace(Handler, Filter, Level).
 
 maybe_make_handler_id(Mod, Config) ->
     %% Allow the backend to generate a gen_event handler id, if it wants to.
@@ -351,6 +387,13 @@ check_handler_config_test_() ->
                                     {format, json},
                                     {json_encoder, jiffy}}],
     BadToo = [{fail, {fail}}],
+    OldSchoolLagerGood = expand_handlers([{lager_console_backend,info},
+                                          {lager_file_backend, [
+                                              {"./log/error.log",error,10485760,"$D0",5},
+                                              {"./log/console.log",info,10485760,"$D0",5},
+                                              {"./log/debug.log",debug,10485760,"$D0",5}
+                                          ]}]),
+    NewConfigMissingList = expand_handlers([{foo_backend, {file, "same_file.log"}}]),
     [
         {"lager_file_backend_good",
          ?_assertEqual([ok, ok, ok], [ check_handler_config(M,C) || {M,C} <- Good ])
@@ -363,6 +406,12 @@ check_handler_config_test_() ->
         },
         {"Invalid config dies",
          ?_assertThrow({error, {bad_config, _}}, start_handlers(foo, BadToo))
+        },
+        {"Old Lager config works",
+         ?_assertEqual([ok, ok, ok, ok], [ check_handler_config(M, C) || {M, C} <- OldSchoolLagerGood])
+        },
+        {"New Config missing its list should fail",
+         ?_assertThrow({error, {bad_config, foo_backend}}, [ check_handler_config(M, C) || {M, C} <- NewConfigMissingList])
         }
     ].
 -endif.

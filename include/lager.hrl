@@ -18,6 +18,8 @@
 -define(DEFAULT_TRUNCATION, 4096).
 -define(DEFAULT_TRACER, lager_default_tracer).
 -define(DEFAULT_SINK, lager_event).
+-define(ERROR_LOGGER_SINK, error_logger_lager_event).
+
 
 -define(LEVELS,
     [debug, info, notice, warning, error, critical, alert, emergency, none]).
@@ -60,6 +62,9 @@
         ?ALERT -> alert;
         ?EMERGENCY -> emergency
     end).
+
+-define(SHOULD_LOG(Sink, Level),
+    (lager_util:level_to_num(Level) band element(1, lager_config:get({Sink, loglevel}, {?LOG_NONE, []}))) /= 0).
 
 -define(SHOULD_LOG(Level),
     (lager_util:level_to_num(Level) band element(1, lager_config:get(loglevel, {?LOG_NONE, []}))) /= 0).
@@ -107,6 +112,7 @@
 -endif.
 
 -record(lager_shaper, {
+                  id :: any(),
                   %% how many messages per second we try to deliver
                   hwm = undefined :: 'undefined' | pos_integer(),
                   %% how many messages we've received this second
@@ -114,7 +120,11 @@
                   %% the current second
                   lasttime = os:timestamp() :: erlang:timestamp(),
                   %% count of dropped messages this second
-                  dropped = 0 :: non_neg_integer()
+                  dropped = 0 :: non_neg_integer(),
+                  %% timer
+                  timer = make_ref() :: reference(),
+                  %% optional filter fun to avoid counting suppressed messages against HWM totals
+                  filter = fun(_) -> false end :: fun()
                  }).
 
 -type lager_shaper() :: #lager_shaper{}.

@@ -22,12 +22,14 @@
 
 -define(LAGER_MD_KEY, '__lager_metadata').
 -define(TRACE_SINK, '__trace_sink').
+-define(ROTATE_TIMEOUT, 100000).
 
 %% API
 -export([start/0,
         log/3, log/4, log/5,
         log_unsafe/4,
         md/0, md/1,
+        rotate_handler/1, rotate_handler/2, rotate_sink/1, rotate_all/0,
         trace/2, trace/3, trace_file/2, trace_file/3, trace_file/4, trace_console/1, trace_console/2,
         list_all_sinks/0, clear_all_traces/0, stop_trace/1, stop_trace/3, status/0,
         get_loglevel/1, get_loglevel/2, set_loglevel/2, set_loglevel/3, set_loglevel/4, get_loglevels/1,
@@ -35,7 +37,7 @@
         safe_format/3, safe_format_chop/3, unsafe_format/2, dispatch_log/5, dispatch_log/7, dispatch_log/9,
         do_log/9, do_log/10, do_log_unsafe/10, pr/2, pr/3, pr_stacktrace/1, pr_stacktrace/2]).
 
--type log_level() :: debug | info | notice | warning | error | critical | alert | emergency.
+-type log_level() :: none | debug | info | notice | warning | error | critical | alert | emergency.
 -type log_level_number() :: 0..7.
 
 -export_type([log_level/0, log_level_number/0]).
@@ -212,7 +214,7 @@ trace_file(File, Filter, Level, Options) ->
         {Sink, {ok, Trace}} ->
             Handlers = lager_config:global_get(handlers, []),
             %% check if this file backend is already installed
-            Res = case lists:keyfind({lager_file_backend, FileName}, 1, Handlers) of
+            Res = case lager_util:find_file(FileName, Handlers) of
                       false ->
                           %% install the handler
                           LogFileConfig =
@@ -274,7 +276,16 @@ stop_trace(Backend, Filter, Level) ->
 stop_trace({Backend, Filter, Level}) ->
     stop_trace(Backend, Filter, Level).
 
-stop_trace_int({Backend, _Filter, _Level} = Trace, Sink) ->
+%% Important: validate_trace_filters orders the arguments of
+%% trace tuples differently than the way outside callers have
+%% the trace tuple.
+%%
+%% That is to say, outside they are represented as 
+%% `{Backend, Filter, Level}'
+%%
+%% and when they come back from validation, they're
+%% `{Filter, Level, Backend}'
+stop_trace_int({_Filter, _Level, Backend} = Trace, Sink) ->
     {Level, Traces} = lager_config:get({Sink, loglevel}),
     NewTraces =  lists:delete(Trace, Traces),
     _ = lager_util:trace_filter([ element(1, T) || T <- NewTraces ]),
@@ -285,7 +296,10 @@ stop_trace_int({Backend, _Filter, _Level} = Trace, Sink) ->
             %% check no other traces point here
             case lists:keyfind(Backend, 3, NewTraces) of
                 false ->
-                    gen_event:delete_handler(Sink, Backend, []);
+                    gen_event:delete_handler(Sink, Backend, []),
+                    lager_config:global_set(handlers,
+                                            lists:keydelete(Backend, 1,
+                                                            lager_config:global_get(handlers)));
                 _ ->
                     ok
             end;
@@ -594,3 +608,41 @@ pr_stacktrace(Stacktrace) ->
 pr_stacktrace(Stacktrace, {Class, Reason}) ->
     lists:flatten(
         pr_stacktrace(Stacktrace) ++ "\n" ++ io_lib:format("~s:~p", [Class, Reason])).
+    
+
+%% R15 compatibility only
+filtermap(Fun, List1) ->
+    lists:foldr(fun(Elem, Acc) ->
+                       case Fun(Elem) of
+                           false -> Acc;
+                           {true,Value} -> [Value|Acc]
+                       end
+                end, [], List1).
+
+rotate_sink(Sink) ->
+    Handlers = lager_config:global_get(handlers),
+    RotateHandlers = filtermap(
+        fun({Handler,_,S}) when S == Sink -> {true, {Handler, Sink}};
+           (_)                            -> false 
+        end, 
+        Handlers),
+    rotate_handlers(RotateHandlers).
+
+rotate_all() -> 
+    rotate_handlers(lists:map(fun({H,_,S}) -> {H, S} end,
+                              lager_config:global_get(handlers))).
+
+
+rotate_handlers(Handlers) ->
+    [ rotate_handler(Handler, Sink) || {Handler, Sink} <- Handlers ].
+
+
+rotate_handler(Handler) ->
+    Handlers = lager_config:global_get(handlers),
+    case lists:keyfind(Handler, 1, Handlers) of
+        {Handler, _, Sink} -> rotate_handler(Handler, Sink);
+        false              -> ok
+    end.
+
+rotate_handler(Handler, Sink) ->
+    gen_event:call(Sink, Handler, rotate, ?ROTATE_TIMEOUT).
