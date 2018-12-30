@@ -146,19 +146,6 @@ print_state(Sink) ->
 print_bad_state(Sink) ->
     gen_event:call(Sink, ?MODULE, print_bad_state).
 
-
-has_line_numbers() ->
-    %% are we R15 or greater
-    % this gets called a LOT - cache the answer
-    case erlang:get({?MODULE, has_line_numbers}) of
-        undefined ->
-            R = lager_util:otp_version() >= 15,
-            erlang:put({?MODULE, has_line_numbers}, R),
-            R;
-        Bool ->
-            Bool
-    end.
-
 not_running_test() ->
     ?assertEqual({error, lager_not_running}, lager:log(info, self(), "not running")).
 
@@ -188,6 +175,16 @@ lager_test_() ->
                         ok
                 end
             },
+            {"logging with macro works",
+                fun() ->
+                        ?lager_warning("test message", []),
+                        ?assertEqual(1, count()),
+                        {Level, _Time, Message, _Metadata}  = pop(),
+                        ?assertMatch(Level, lager_util:level_to_num(warning)),
+                        ?assertEqual("test message", Message),
+                        ok
+                end
+            },
             {"unsafe logging works",
                 fun() ->
                         lager:warning_unsafe("test message"),
@@ -201,6 +198,16 @@ lager_test_() ->
             {"logging with arguments works",
                 fun() ->
                         lager:warning("test message ~p", [self()]),
+                        ?assertEqual(1, count()),
+                        {Level, _Time, Message,_Metadata}  = pop(),
+                        ?assertMatch(Level, lager_util:level_to_num(warning)),
+                        ?assertEqual(lists:flatten(io_lib:format("test message ~p", [self()])), lists:flatten(Message)),
+                        ok
+                end
+            },
+            {"logging with macro and arguments works",
+                fun() ->
+                        ?lager_warning("test message ~p", [self()]),
                         ?assertEqual(1, count()),
                         {Level, _Time, Message,_Metadata}  = pop(),
                         ?assertMatch(Level, lager_util:level_to_num(warning)),
@@ -864,7 +871,9 @@ setup() ->
     %% This race condition was first exposed during the work on
     %% 4b5260c4524688b545cc12da6baa2dfa4f2afec9 which introduced the lager
     %% manager killer PR.
-    timer:sleep(5),
+    application:set_env(lager, suppress_supervisor_start_stop, true),
+    application:set_env(lager, suppress_application_start_stop, true),
+    timer:sleep(1000),
     gen_event:call(lager_event, ?MODULE, flush).
 
 cleanup(_) ->
@@ -881,45 +890,40 @@ crash(Type) ->
     ok.
 
 test_body(Expected, Actual) ->
-    case has_line_numbers() of
+    ExLen = length(Expected),
+    {Body, Rest} = case length(Actual) > ExLen of
         true ->
-            ExLen = length(Expected),
-            {Body, Rest} = case length(Actual) > ExLen of
-                true ->
-                    {string:substr(Actual, 1, ExLen),
-                        string:substr(Actual, (ExLen + 1))};
-                _ ->
-                    {Actual, []}
-            end,
-            ?assertEqual(Expected, Body),
-            % OTP-17 (and maybe later releases) may tack on additional info
-            % about the failure, so if Actual starts with Expected (already
-            % confirmed by having gotten past assertEqual above) and ends
-            % with " line NNN" we can ignore what's in-between. By extension,
-            % since there may not be line information appended at all, any
-            % text we DO find is reportable, but not a test failure.
-            case Rest of
-                [] ->
-                    ok;
-                _ ->
-                    % isolate the extra data and report it if it's not just
-                    % a line number indicator
-                    case re:run(Rest, "^.*( line \\d+)$", [{capture, [1]}]) of
-                        nomatch ->
-                            ?debugFmt(
-                                "Trailing data \"~s\" following \"~s\"",
-                                [Rest, Expected]);
-                        {match, [{0, _}]} ->
-                            % the whole sting is " line NNN"
-                            ok;
-                        {match, [{Off, _}]} ->
-                            ?debugFmt(
-                                "Trailing data \"~s\" following \"~s\"",
-                                [string:substr(Rest, 1, Off), Expected])
-                    end
-            end;
+            {string:substr(Actual, 1, ExLen),
+                string:substr(Actual, (ExLen + 1))};
         _ ->
-            ?assertEqual(Expected, Actual)
+            {Actual, []}
+    end,
+    ?assertEqual(Expected, Body),
+    % OTP-17 (and maybe later releases) may tack on additional info
+    % about the failure, so if Actual starts with Expected (already
+    % confirmed by having gotten past assertEqual above) and ends
+    % with " line NNN" we can ignore what's in-between. By extension,
+    % since there may not be line information appended at all, any
+    % text we DO find is reportable, but not a test failure.
+    case Rest of
+        [] ->
+            ok;
+        _ ->
+            % isolate the extra data and report it if it's not just
+            % a line number indicator
+            case re:run(Rest, "^.*( line \\d+)$", [{capture, [1]}]) of
+                nomatch ->
+                    ?debugFmt(
+                       "Trailing data \"~s\" following \"~s\"",
+                       [Rest, Expected]);
+                {match, [{0, _}]} ->
+                    % the whole sting is " line NNN"
+                    ok;
+                {match, [{Off, _}]} ->
+                    ?debugFmt(
+                       "Trailing data \"~s\" following \"~s\"",
+                       [string:substr(Rest, 1, Off), Expected])
+            end
     end.
 
 error_logger_redirect_crash_setup() ->
@@ -994,14 +998,14 @@ kill_crasher(RegName) ->
         Pid -> exit(Pid, kill)
     end.
 
-spawn_fsm_crash(Module) ->
-    spawn(fun() -> Module:crash() end),
+spawn_fsm_crash(Module, Function, Args) ->
+    spawn(fun() -> erlang:apply(Module, Function, Args) end),
     timer:sleep(100),
     _ = gen_event:which_handlers(error_logger),
     ok.
 
 crash_fsm_test_() ->
-    TestBody = fun(Name, FsmModule, Expected) ->
+    TestBody = fun(Name, FsmModule, FSMFunc, FSMArgs, Expected) ->
                    fun(Sink) ->
                       {Name,
                        fun() ->
@@ -1009,7 +1013,7 @@ crash_fsm_test_() ->
                                 {true, true} -> ok;
                                 _ ->
                                     Pid = whereis(FsmModule),
-                                    spawn_fsm_crash(FsmModule),
+                                    spawn_fsm_crash(FsmModule, FSMFunc, FSMArgs),
                                     {Level, _, Msg, Metadata} = pop(Sink),
                                     test_body(Expected, lists:flatten(Msg)),
                                     ?assertEqual(Pid, proplists:get_value(pid, Metadata)),
@@ -1029,8 +1033,10 @@ crash_fsm_test_() ->
             }
         end,
 
-        TestBody("gen_fsm crash", crash_fsm, "gen_fsm crash_fsm in state state1 terminated with reason: call to undefined function crash_fsm:state1/3 from gen_fsm:handle_msg/"),
-        TestBody("gen_statem crash", crash_statem, "gen_statem crash_statem in state state1 terminated with reason: no function clause matching crash_statem:handle")
+        TestBody("gen_fsm crash", crash_fsm, crash, [], "gen_fsm crash_fsm in state state1 terminated with reason: call to undefined function crash_fsm:state1/3 from gen_fsm:handle_msg/"),
+        TestBody("gen_statem crash", crash_statem, crash, [], "gen_statem crash_statem in state state1 terminated with reason: no function clause matching crash_statem:handle"),
+        TestBody("gen_statem stop", crash_statem, stop, [explode], "gen_statem crash_statem in state state1 terminated with reason: explode"),
+        TestBody("gen_statem timeout", crash_statem, timeout, [], "gen_statem crash_statem in state state1 terminated with reason: timeout")
     ],
 
     {"FSM crash output tests", [
@@ -1087,6 +1093,7 @@ error_logger_redirect_crash_test_() ->
         TestBody("bad arg2",badarg2,"gen_server crash terminated with reason: bad argument in call to erlang:iolist_to_binary([\"foo\",bar]) in crash:handle_call/3"),
         TestBody("bad record",badrecord,"gen_server crash terminated with reason: bad record state in crash:handle_call/3"),
         TestBody("noproc",noproc,"gen_server crash terminated with reason: no such process or port in call to gen_event:call(foo, bar, baz)"),
+        TestBody("noproc_proc_lib",noproc_proc_lib,"gen_server crash terminated with reason: no such process or port in call to proc_lib:stop/3"),
         TestBody("badfun",badfun,"gen_server crash terminated with reason: bad function booger in crash:handle_call/3")
     ],
     {"Error logger redirect crash", [
@@ -1108,9 +1115,11 @@ error_logger_redirect_setup() ->
     application:load(lager),
     application:set_env(lager, error_logger_redirect, true),
     application:set_env(lager, handlers, [{?MODULE, info}]),
+    application:set_env(lager, suppress_supervisor_start_stop, false),
+    application:set_env(lager, suppress_application_start_stop, false),
     lager:start(),
     lager:log(error, self(), "flush flush"),
-    timer:sleep(100),
+    timer:sleep(1000),
     gen_event:call(lager_event, ?MODULE, flush),
     lager_event.
 
@@ -1122,9 +1131,11 @@ error_logger_redirect_setup_sink() ->
     application:set_env(lager, extra_sinks, [
         {error_logger_lager_event, [
             {handlers, [{?MODULE, info}]}]}]),
+    application:set_env(lager, suppress_supervisor_start_stop, false),
+    application:set_env(lager, suppress_application_start_stop, false),
     lager:start(),
     lager:log(error_logger_lager_event, error, self(), "flush flush", []),
-    timer:sleep(100),
+    timer:sleep(1000),
     gen_event:call(error_logger_lager_event, ?MODULE, flush),
     error_logger_lager_event.
 
