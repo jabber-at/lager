@@ -1,15 +1,14 @@
 #!/usr/bin/make -f
-# -*- makefile -*-
+export DH_VERBOSE=1
 
-# Uncomment this to turn on verbose mode.
-#export DH_VERBOSE=1
-
-include /usr/share/dpkg/pkg-info.mk
+include /usr/share/dpkg/default.mk
 
 DESTDIR=$(CURDIR)/debian/erlang-lager
 
+
 %:
 	dh $@ --buildsystem=rebar --with rebar
+
 
 override_dh_auto_install:
 	dh_auto_install
@@ -23,12 +22,9 @@ override_dh_auto_install:
 		fi ; \
 	done
 
-override_dh_auto_configure:
-	# remove common test-backend, it's unnecessary
-	rm -f src/lager_common_test_backend.erl
-	dh_auto_configure
 
-get-orig-source:
-	dh_testdir
-	wget -O ../erlang-lager_$(DEB_VERSION_UPSTREAM).orig.tar.gz \
-		https://github.com/basho/lager/archive/$(DEB_VERSION_UPSTREAM).tar.gz
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	# Test framework is wonky, so run it but don't fail the build
+	rebar eunit || true
+endif

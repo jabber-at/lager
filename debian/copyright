@@ -1,9 +1,9 @@
-Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: lager
-Source: https://github.com/basho/lager
+Source: https://github.com/erlang-lager/lager
 
 Files: *
-Copyright: 2011-2014 Basho Technologies, Inc.
+Copyright: 2011-2018 Basho Technologies, Inc.
 License: Apache-2.0
  Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
@@ -38,7 +38,8 @@ License: EPL-1.1
  under the License.
 
 Files: debian/*
-Copyright: 2014 Philipp Huebner <debalance@debian.org>
+Copyright: 2014-2018 Philipp Huebner <debalance@debian.org>
+           2014-2018 Mathias Ertl <mati@jabber.at>
 License: GPL-2+
  This package is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
