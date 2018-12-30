@@ -1,20 +1,26 @@
 Source: erlang-lager
-Priority: optional
 Maintainer: Mathias Ertl <mati@jabber.at>
 XSBC-Orig-Maintainer: Philipp Huebner <debalance@debian.org>
-Build-Depends: debhelper (>= 9), dpkg-dev (>= 1.16.1~), dh-rebar,
- erlang-goldrush (>= 0.1.9), erlang-crypto, erlang-syntax-tools
-Standards-Version: 4.0.0
 Section: libs
-Homepage: https://github.com/basho/lager
+Priority: optional
+Build-Depends: debhelper (>= 11),
+               dh-rebar,
+               erlang-base,
+               erlang-crypto,
+               erlang-eunit,
+               erlang-goldrush (>= 0.2)
+Standards-Version: 4.2.1
 VCS-Browser: https://github.com/jabber-at/lager
 VCS-Git: https://github.com/jabber-at/lager.git
-
+Homepage: https://github.com/erlang-lager/lager
 
 Package: erlang-lager
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, erlang-base | ${erlang-abi:Depends},
-         ${erlang:Depends}, erlang-goldrush
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         erlang-base | ${erlang-abi:Depends},
+         ${erlang-base:Depends},
+         erlang-goldrush (>= 0.2)
 Description: logging framework for Erlang
  Lager (as in the beer) is a logging framework for Erlang. Its purpose is
  to provide a more traditional way to perform logging in an erlang application
