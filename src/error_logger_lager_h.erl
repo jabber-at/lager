@@ -72,8 +72,10 @@ set_high_water(N) ->
 
 -spec init(any()) -> {ok, #state{}}.
 init([HighWaterMark, GlStrategy]) ->
-    Shaper = #lager_shaper{hwm=HighWaterMark, filter=shaper_fun(), id=?MODULE},
-    Raw = lager_app:get_env(lager, error_logger_format_raw, false),
+    Flush = application:get_env(lager, error_logger_flush_queue, true),
+    FlushThr = application:get_env(lager, error_logger_flush_threshold, 0),
+    Shaper = #lager_shaper{hwm=HighWaterMark, flush_queue = Flush, flush_threshold = FlushThr, filter=shaper_fun(), id=?MODULE},
+    Raw = application:get_env(lager, error_logger_format_raw, false),
     Sink = configured_sink(),
     {ok, #state{sink=Sink, shaper=Shaper, groupleader_strategy=GlStrategy, raw=Raw}}.
 
@@ -84,7 +86,7 @@ handle_call(_Request, State) ->
     {ok, unknown_call, State}.
 
 shaper_fun() ->
-    case {lager_app:get_env(lager, suppress_supervisor_start_stop, false), lager_app:get_env(lager, suppress_application_start_stop, false)} of
+    case {application:get_env(lager, suppress_supervisor_start_stop, false), application:get_env(lager, suppress_application_start_stop, false)} of
         {false, false} ->
             fun(_) -> false end;
         {true, true} ->
@@ -119,15 +121,20 @@ handle_event(Event, #state{sink=Sink, shaper=Shaper} = State) ->
                 "lager_error_logger_h dropped ~p messages in the last second that exceeded the limit of ~p messages/sec",
                 [Drop, Hwm]),
             eval_gl(Event, State#state{shaper=NewShaper});
-        {false, _, NewShaper} ->
-            {ok, State#state{shaper=NewShaper}}
+        {false, _, #lager_shaper{dropped=D} = NewShaper} ->
+            {ok, State#state{shaper=NewShaper#lager_shaper{dropped=D+1}}}
     end.
 
 handle_info({shaper_expired, ?MODULE}, #state{sink=Sink, shaper=Shaper} = State) ->
-    ?LOGFMT(Sink, warning, self(),
-            "lager_error_logger_h dropped ~p messages in the last second that exceeded the limit of ~p messages/sec",
-            [Shaper#lager_shaper.dropped, Shaper#lager_shaper.hwm]),
-    {ok, State#state{shaper=Shaper#lager_shaper{dropped=0, mps=1, lasttime=os:timestamp()}}};
+    case Shaper#lager_shaper.dropped of
+        0 ->
+            ok;
+        Dropped ->
+            ?LOGFMT(Sink, warning, self(),
+                    "lager_error_logger_h dropped ~p messages in the last second that exceeded the limit of ~p messages/sec",
+                    [Dropped, Shaper#lager_shaper.hwm])
+    end,
+    {ok, State#state{shaper=Shaper#lager_shaper{dropped=0, mps=0, lasttime=os:timestamp()}}};
 handle_info(_Info, State) ->
     {ok, State}.
 
@@ -136,7 +143,7 @@ terminate(_Reason, _State) ->
 
 
 code_change(_OldVsn, {state, Shaper, GLStrategy}, _Extra) ->
-    Raw = lager_app:get_env(lager, error_logger_format_raw, false),
+    Raw = application:get_env(lager, error_logger_format_raw, false),
     {ok, #state{
         sink=configured_sink(),
         shaper=Shaper,
@@ -144,7 +151,7 @@ code_change(_OldVsn, {state, Shaper, GLStrategy}, _Extra) ->
         raw=Raw
         }};
 code_change(_OldVsn, {state, Sink, Shaper, GLS}, _Extra) ->
-    Raw = lager_app:get_env(lager, error_logger_format_raw, false),
+    Raw = application:get_env(lager, error_logger_format_raw, false),
     {ok, #state{sink=Sink, shaper=Shaper, groupleader_strategy=GLS, raw=Raw}};
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -152,7 +159,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% internal functions
 
 configured_sink() ->
-    case proplists:get_value(?ERROR_LOGGER_SINK, lager_app:get_env(lager, extra_sinks, [])) of
+    case proplists:get_value(?ERROR_LOGGER_SINK, application:get_env(lager, extra_sinks, [])) of
         undefined -> ?DEFAULT_SINK;
         _ -> ?ERROR_LOGGER_SINK
     end.
@@ -181,6 +188,9 @@ log_event(Event, #state{sink=Sink} = State) ->
                     {Reason, Name} = case Args of
                                          [N, _Msg, _State, R] ->
                                              {R, N};
+                                         [N, _Msg, _State, R, _Client] ->
+                                             %% OTP 20 crash reports where the client pid is dead don't include the stacktrace
+                                             {R, N};
                                          [N, _Msg, _State, R, _Client, _Stacktrace] ->
                                              %% OTP 20 crash reports contain the pid of the client and stacktrace
                                              %% TODO do something with them
@@ -197,6 +207,9 @@ log_event(Event, #state{sink=Sink} = State) ->
                         [TName, _Msg, TStateName, _StateData, TReason] ->
                             {gen_fsm, TName, TStateName, TReason};
                         [TName, _Msg, {TStateName, _StateData}, _ExitType, TReason, _FsmType, Stacktrace] ->
+                            {gen_statem, TName, TStateName, {TReason, Stacktrace}};
+                        [TName, _Msg, [{TStateName, _StateData}], _ExitType, TReason, _FsmType, Stacktrace] ->
+                            %% sometimes gen_statem wraps its statename/data in a list for some reason???
                             {gen_statem, TName, TStateName, {TReason, Stacktrace}}
                     end,
                     {Md, Formatted} = format_reason_md(Reason),
@@ -319,7 +332,7 @@ log_event(Event, #state{sink=Sink} = State) ->
                                     [App, Node])
                     end;
                 [{started, Started}, {supervisor, Name}] ->
-                    case lager_app:get_env(lager, suppress_supervisor_start_stop, false) of
+                    case application:get_env(lager, suppress_supervisor_start_stop, false) of
                         true ->
                             ok;
                         _ ->
@@ -495,7 +508,7 @@ format_reason_md({{badarity, {Fun, Args}}, [MFA|_]}) ->
                     [length(Args), Arity]), Formatted]};
 format_reason_md({noproc, MFA}) ->
     {Md, Formatted} = format_mfa_md(MFA),
-    {[{reason, badarity} | Md],
+    {[{reason, noproc} | Md],
      ["no such process or port in call to ", Formatted]};
 format_reason_md({{badfun, Term}, [MFA|_]}) ->
     {Md, Formatted} = format_mfa_md(MFA),
@@ -532,11 +545,13 @@ format_mfa_md({M, F, A, Props}) when is_list(Props) ->
             {Md, Formatted} = format_mfa_md({M, F, A}),
             {[{line, Line} | Md], [Formatted, io_lib:format(" line ~w", [Line])]}
     end;
-format_mfa_md([{M, F, A}, _]) ->
+format_mfa_md([{M, F, A}| _]) ->
    %% this kind of weird stacktrace can be generated by a uncaught throw in a gen_server
    format_mfa_md({M, F, A});
-format_mfa_md([{M, F, A, Props}, _]) when is_list(Props) ->
+format_mfa_md([{M, F, A, Props}| _]) when is_list(Props) ->
    %% this kind of weird stacktrace can be generated by a uncaught throw in a gen_server
+   %% TODO we might not always want to print the first MFA we see here, often it is more helpful
+   %% to print a lower one, but it is hard to programatically decide.
    format_mfa_md({M, F, A, Props});
 format_mfa_md(Other) ->
     {[], io_lib:format("~w", [Other])}.
@@ -584,3 +599,44 @@ get_value(Key, List, Default) ->
 
 supervisor_name({local, Name}) -> Name;
 supervisor_name(Name) -> Name.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+no_silent_hwm_drops_test_() ->
+    {timeout, 10000,
+        [
+            fun() ->
+                error_logger:tty(false),
+                application:load(lager),
+                application:set_env(lager, handlers, [{lager_test_backend, warning}]),
+                application:set_env(lager, error_logger_redirect, true),
+                application:set_env(lager, error_logger_hwm, 5),
+                application:set_env(lager, error_logger_flush_queue, false),
+                application:set_env(lager, suppress_supervisor_start_stop, true),
+                application:set_env(lager, suppress_application_start_stop, true),
+                application:unset_env(lager, crash_log),
+                lager:start(),
+                try
+                    {_, _, MS} = os:timestamp(),
+                    timer:sleep((1000000 - MS) div 1000 + 1),
+                    %start close to the beginning of a new second
+                    [error_logger:error_msg("Foo ~p~n", [K]) || K <- lists:seq(1, 15)],
+                    timer:sleep(1000),
+                    lager_handler_watcher:pop_until("lager_error_logger_h dropped 10 messages in the last second that exceeded the limit of 5 messages/sec",
+                        fun lists:flatten/1),
+                    %and once again
+                    [error_logger:error_msg("Foo1 ~p~n", [K]) || K <- lists:seq(1, 20)],
+                    timer:sleep(1000),
+                    lager_handler_watcher:pop_until("lager_error_logger_h dropped 16 messages in the last second that exceeded the limit of 5 messages/sec",
+                        fun lists:flatten/1)
+                after
+                    application:stop(lager),
+                    application:stop(goldrush),
+                    error_logger:tty(true)
+                end
+            end
+        ]
+    }.
+
+-endif.
