@@ -1,2 +1,3 @@
 version=3
-https://github.com/erlang-lager/lager/tags .*/(.*)\.tar\.gz
+opts="filenamemangle=s/.*\/v?(\d\S*)\.tar\.gz/erlang-lager_$1.tar.gz/" \
+  https://github.com/erlang-lager/lager/releases .*/v?(\d\S*)\.tar\.gz
