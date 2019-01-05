@@ -1,26 +1,35 @@
 Description: remove deps in rebar.config
  Without this patch, rebar would download and compile the listed deps
- at compile time.
+ at build time.
 Author: Philipp Huebner <debalance@debian.org>
 
---- a/rebar.config
-+++ b/rebar.config
-@@ -47,9 +47,6 @@
+Index: erlang-lager/rebar.config
+===================================================================
+--- erlang-lager.orig/rebar.config
++++ erlang-lager/rebar.config
+@@ -49,10 +49,6 @@
      nowarn_export_all
  ]}.
  
 -{deps, [
 -    {goldrush, "0.1.9"}
 -]}.
- 
+-
  {xref_checks, []}.
  {xref_queries, [{"(XC - UC) || (XU - X - B - lager_default_tracer : Mod - erlang:\"(is_map|map_size)\"/1 - maps:to_list/1)", []}]}.
---- a/rebar.config.script
-+++ b/rebar.config.script
-@@ -5,6 +5,5 @@
-         %% Rebuild deps, possibly including those that have been moved to
-         %% profiles
-         [{deps, [
+ 
+Index: erlang-lager/rebar.config.script
+===================================================================
+--- erlang-lager.orig/rebar.config.script
++++ /dev/null
+@@ -1,10 +0,0 @@
+-case erlang:function_exported(rebar3, main, 1) of
+-    true -> % rebar3
+-        CONFIG;
+-    false -> % rebar 2.x or older
+-        %% Rebuild deps, possibly including those that have been moved to
+-        %% profiles
+-        [{deps, [
 -	   {goldrush, ".*", {git, "https://github.com/DeadZen/goldrush.git", {tag, "0.1.9"}}}
-         ]} | lists:keydelete(deps, 1, CONFIG)]
- end.
+-        ]} | lists:keydelete(deps, 1, CONFIG)]
+-end.

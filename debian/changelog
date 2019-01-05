@@ -1,3 +1,13 @@
+erlang-lager (3.6.8-0.1) unstable; urgency=low
+
+  * Rename XSBC-Orig-Maintainer to XSBC-Original-Maintainer to match the
+    Debian Derivatives Guidelines
+  * Updated Standards-Version: 4.3.0 (no changes needed)
+  * Updated years in debian/copyright
+  * Remove redundant lintian overrides
+
+ -- Mathias Ertl <mati@jabber.at>  Sat, 05 Jan 2019 12:20:48 +0100
+
 erlang-lager (3.6.6-0.1) unstable; urgency=low
 
   * New upstream version 3.6.6

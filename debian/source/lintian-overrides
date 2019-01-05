@@ -1,2 +1,2 @@
-source: maintainer-upload-has-incorrect-version-number
-source: unknown-field-in-dsc orig-maintainer
+erlang-lager source: debian-watch-does-not-check-gpg-signature
+erlang-lager source: testsuite-autopkgtest-missing

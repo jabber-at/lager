@@ -1,6 +1,6 @@
 Source: erlang-lager
 Maintainer: Mathias Ertl <mati@jabber.at>
-XSBC-Orig-Maintainer: Philipp Huebner <debalance@debian.org>
+XSBC-Original-Maintainer: Philipp Huebner <debalance@debian.org>
 Section: libs
 Priority: optional
 Build-Depends: debhelper (>= 11),
@@ -9,7 +9,7 @@ Build-Depends: debhelper (>= 11),
                erlang-crypto,
                erlang-eunit,
                erlang-goldrush (>= 0.2)
-Standards-Version: 4.2.1
+Standards-Version: 4.3.0
 VCS-Browser: https://github.com/jabber-at/lager
 VCS-Git: https://github.com/jabber-at/lager.git
 Homepage: https://github.com/erlang-lager/lager
