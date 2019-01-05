@@ -54,8 +54,8 @@ We review PRs and issues at least once a month as described below.
 OTP Support Policy
 ------------------
 The lager maintainers intend to support the past three OTP releases from
-current on the main 3.x branch of the project. As of July 2017 that includes 
-20, 19, and 18. 
+current on the main 3.x branch of the project. As of December 2018 that includes
+21, 20, 19.
 
 Lager may or may not run on older OTP releases but it will only be guaranteed
 tested on the previous three OTP releases. If you need a version of lager
@@ -293,6 +293,14 @@ lager itself to be treated like a regular lager log call. To disable this, set
 the lager application variable `error_logger_redirect` to `false`.
 You can also disable reformatting for OTP and Cowboy messages by setting variable
 `error_logger_format_raw` to `true`.
+
+If you installed your own handler(s) into `error_logger`, you can tell
+lager to leave it alone by using the `error_logger_whitelist` environment
+variable with a list of handlers to allow.
+
+```
+{error_logger_whitelist, [my_handler]}
+```
 
 The `error_logger` handler will also log more complete error messages (protected
 with use of `trunc_io`) to a "crash log" which can be referred to for further
@@ -593,6 +601,7 @@ on your favorite search engine is a good starting point.
 
 Exception Pretty Printing
 ----------------------
+Up to OTP 20:
 
 ```erlang
 try
@@ -602,6 +611,19 @@ catch
         lager:error(
             "~nStacktrace:~s",
             [lager:pr_stacktrace(erlang:get_stacktrace(), {Class, Reason})])
+end.
+```
+
+On OTP 21+:
+
+```erlang
+try
+    foo()
+catch
+    Class:Reason:Stacktrace ->
+        lager:error(
+            "~nStacktrace:~s",
+            [lager:pr_stacktrace(Stacktrace), {Class, Reason}])
 end.
 ```
 
@@ -935,8 +957,6 @@ will be impacted by what the functions you call do and how much latency they
 may introduce. This impact will even greater with `on_log` since the calls
 are injected at the point a message is logged.
 
-
-
 Setting the truncation limit at compile-time
 --------------------------------------------
 Lager defaults to truncating messages at 4096 bytes, you can alter this by
@@ -973,6 +993,18 @@ function in a target process by doing
 lager:install_trace(Pid, notice).
 ```
 
+You can also customize the tracing somewhat:
+
+```erlang
+lager:install_trace(Pid, notice, [{count, 100}, {timeout, 5000}, {format_string, "my trace event ~p ~p"]}).
+```
+
+The trace options are currently:
+
+* timeout - how long the trace stays installed: `infinity` (the default) or a millisecond timeout
+* count - how many trace events to log: `infinity` (default) or a positive number
+* format_string - the format string to log the event with. *Must* have 2 format specifiers for the 2 parameters supplied.
+
 This will, on every 'system event' for an OTP process (usually inbound messages, replies
 and state changes) generate a lager message at the specified log level.
 
@@ -981,6 +1013,14 @@ You can remove the trace when you're done by doing:
 ```erlang
 lager:remove_trace(Pid).
 ```
+
+If you want to start an OTP process with tracing enabled from the very beginning, you can do something like this:
+
+```erlang
+gen_server:start_link(mymodule, [], [{debug, [{install, {fun lager:trace_func/3, lager:trace_state(undefined, notice, [])}}]}]).
+```
+
+The third argument to the trace_state function is the Option list documented above.
 
 Console output to another group leader process
 ----------------------------------------------
@@ -1100,6 +1140,18 @@ Example Usage:
 
 3.x Changelog
 -------------
+3.6.8 - 21 December 2018
+
+    * Documentation: Document the error_logger_whitelist environment variable. (#489)
+    * Bugfix: Remove the built in handler inside of OTP 21 `logger` system. (#488)
+    * Bugfix: Cleanup unneeded check for is_map (#486)
+    * Bugfix: Cleanup ranch errors treated as cowboy errors (#485)
+    * Testing: Remove OTP 18 from TravisCI testing matrix
+
+3.6.7 - 14 October 2018
+
+    * Bugfix: fix tracing to work with OTP21 #480
+
 3.6.6 - 24 September 2018
 
     * Bugfix: When printing records, handle an improper list correctly. #478
